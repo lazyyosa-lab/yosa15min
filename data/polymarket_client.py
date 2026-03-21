@@ -25,7 +25,9 @@ class PolymarketClient:
             "active": "true",
             "closed": "false",
             "limit": 100,
-            "keyword": "Bitcoin Up or Down"
+            "tag_slug": "crypto",      # narrow to crypto category
+            "order": "volume24hr",     # most active first
+            "ascending": "false"
         }
 
         try:
@@ -36,9 +38,13 @@ class PolymarketClient:
 
             markets = data if isinstance(data, list) else data.get("markets", [])
             logger.info(f"Polymarket raw market count: {len(markets)}")
-            for m in markets[:5]:  # log first 5 titles for debugging
-                t = m.get("question") or m.get("title") or "NO TITLE"
-                logger.info(f"  → {t}")
+
+            # Log all titles so we can see exactly what's coming back
+            for m in markets:
+                t = (m.get("question") or m.get("title") or "NO TITLE")
+                if "bitcoin" in t.lower() or "btc" in t.lower():
+                    logger.info(f"  BTC market found: {t}")
+
             btc_windows = self._filter_window_markets(markets)
             logger.info(f"Found {len(btc_windows)} active BTC window markets")
             return btc_windows
