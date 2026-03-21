@@ -15,7 +15,7 @@ class Config:
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
     # Binance (public API — no keys needed for candle data)
-    BINANCE_BASE_URL: str = "https://api.binance.com"
+    BINANCE_BASE_URL: str = "https://api.binance.us"
     BINANCE_SYMBOL: str = "BTCUSDT"
     BINANCE_INTERVAL: str = "15m"
     BINANCE_CANDLE_LIMIT: int = 50  # enough for ATR(14) + buffer
