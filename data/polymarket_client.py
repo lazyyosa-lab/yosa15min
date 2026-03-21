@@ -18,40 +18,49 @@ class PolymarketClient:
     async def get_btc_windows(self) -> list[dict]:
         """
         Query Gamma API for active BTC 15-min UP/DOWN markets.
-        Returns list of market dicts with title, YES price, liquidity, etc.
+        Tries multiple tag slugs since the 15-min markets are in a specific category.
         """
-        url = f"{Config.POLYMARKET_GAMMA_URL}/markets"
-        params = {
-            "active": "true",
-            "closed": "false",
-            "limit": 100,
-            "tag_slug": "crypto",      # narrow to crypto category
-            "order": "volume24hr",     # most active first
-            "ascending": "false"
-        }
+        # Try these tag slugs — 15-min markets may be under a specific one
+        tag_slugs = ["15-min-crypto", "crypto-15m", "15m", "15-minutes", "crypto"]
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
+        all_markets = []
+        seen_ids = set()
 
-            markets = data if isinstance(data, list) else data.get("markets", [])
-            logger.info(f"Polymarket raw market count: {len(markets)}")
+        for tag_slug in tag_slugs:
+            url = f"{Config.POLYMARKET_GAMMA_URL}/markets"
+            params = {
+                "active": "true",
+                "closed": "false",
+                "limit": 100,
+                "tag_slug": tag_slug,
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                markets = data if isinstance(data, list) else data.get("markets", [])
+                for m in markets:
+                    mid = m.get("id") or m.get("conditionId")
+                    if mid not in seen_ids:
+                        seen_ids.add(mid)
+                        all_markets.append(m)
+                logger.info(f"tag_slug={tag_slug}: got {len(markets)} markets")
+            except Exception as e:
+                logger.warning(f"tag_slug={tag_slug} failed: {e}")
 
-            # Log all titles so we can see exactly what's coming back
-            for m in markets:
-                t = (m.get("question") or m.get("title") or "NO TITLE")
-                if "bitcoin" in t.lower() or "btc" in t.lower():
-                    logger.info(f"  BTC market found: {t}")
+        logger.info(f"Total unique markets fetched: {len(all_markets)}")
 
-            btc_windows = self._filter_window_markets(markets)
-            logger.info(f"Found {len(btc_windows)} active BTC window markets")
-            return btc_windows
+        # Log every market title so we can see exactly what's available
+        for m in all_markets:
+            t = (m.get("question") or m.get("title") or "")
+            if "bitcoin" in t.lower() or "btc" in t.lower() or "up or down" in t.lower():
+                logger.info(f"  BTC/UP-DOWN market: {t}")
 
-        except Exception as e:
-            logger.error(f"Polymarket Gamma fetch failed: {e}")
-            return []
+        btc_windows = self._filter_window_markets(all_markets)
+        logger.info(f"Found {len(btc_windows)} active BTC window markets")
+        return btc_windows
 
     def _filter_window_markets(self, markets: list) -> list[dict]:
         """
