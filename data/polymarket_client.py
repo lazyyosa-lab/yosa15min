@@ -17,46 +17,61 @@ class PolymarketClient:
 
     async def get_btc_windows(self) -> list[dict]:
         """
-        Query Gamma API for active BTC 15-min UP/DOWN markets.
-        Tries multiple tag slugs since the 15-min markets are in a specific category.
+        Fetch all active Polymarket markets and filter by title for
+        'Bitcoin Up or Down' 15-min markets. Paginates to ensure full coverage.
         """
-        # Try these tag slugs — 15-min markets may be under a specific one
-        tag_slugs = ["15-min-crypto", "crypto-15m", "15m", "15-minutes", "crypto"]
-
         all_markets = []
-        seen_ids = set()
+        offset = 0
+        limit = 100
 
-        for tag_slug in tag_slugs:
-            url = f"{Config.POLYMARKET_GAMMA_URL}/markets"
-            params = {
-                "active": "true",
-                "closed": "false",
-                "limit": 100,
-                "tag_slug": tag_slug,
-            }
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status != 200:
-                            continue
+        try:
+            async with aiohttp.ClientSession() as session:
+                while True:
+                    url = f"{Config.POLYMARKET_GAMMA_URL}/markets"
+                    params = {
+                        "active": "true",
+                        "closed": "false",
+                        "limit": limit,
+                        "offset": offset,
+                    }
+                    async with session.get(
+                        url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        resp.raise_for_status()
                         data = await resp.json()
-                markets = data if isinstance(data, list) else data.get("markets", [])
-                for m in markets:
-                    mid = m.get("id") or m.get("conditionId")
-                    if mid not in seen_ids:
-                        seen_ids.add(mid)
-                        all_markets.append(m)
-                logger.info(f"tag_slug={tag_slug}: got {len(markets)} markets")
-            except Exception as e:
-                logger.warning(f"tag_slug={tag_slug} failed: {e}")
 
-        logger.info(f"Total unique markets fetched: {len(all_markets)}")
+                    page = data if isinstance(data, list) else data.get("markets", [])
+                    if not page:
+                        break
 
-        # Log every market title so we can see exactly what's available
+                    all_markets.extend(page)
+
+                    # Check if any UP/DOWN markets found yet — stop early if yes
+                    found = [
+                        m for m in page
+                        if "up or down" in (m.get("question") or m.get("title") or "").lower()
+                    ]
+                    if found:
+                        logger.info(f"Found UP/DOWN markets at offset {offset}")
+                        break
+
+                    # Stop after 5 pages (500 markets) to avoid hammering the API
+                    if len(page) < limit or offset >= 400:
+                        break
+
+                    offset += limit
+
+        except Exception as e:
+            logger.error(f"Polymarket fetch failed: {e}")
+            return []
+
+        logger.info(f"Total markets scanned: {len(all_markets)}")
+
+        # Log every UP/DOWN or Bitcoin market found
         for m in all_markets:
             t = (m.get("question") or m.get("title") or "")
-            if "bitcoin" in t.lower() or "btc" in t.lower() or "up or down" in t.lower():
-                logger.info(f"  BTC/UP-DOWN market: {t}")
+            if "up or down" in t.lower() or ("bitcoin" in t.lower() and "15" in t.lower()):
+                logger.info(f"  Candidate: {t}")
 
         btc_windows = self._filter_window_markets(all_markets)
         logger.info(f"Found {len(btc_windows)} active BTC window markets")
