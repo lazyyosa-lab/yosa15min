@@ -7,7 +7,6 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
-import numpy as np
 
 from config import Config
 
@@ -166,8 +165,15 @@ def compute_indicators(df: pd.DataFrame) -> Optional[IndicatorResult]:
         else:
             up_votes = sum(1 for s in signals if s)
             down_votes = len(signals) - up_votes
-            direction = "UP" if up_votes >= down_votes else "DOWN"
-            confidence = max(up_votes, down_votes) / len(signals)
+            if up_votes == down_votes:
+                direction = "UNCLEAR"   # genuine tie — no majority
+                confidence = 0.5
+            elif up_votes > down_votes:
+                direction = "UP"
+                confidence = up_votes / len(signals)
+            else:
+                direction = "DOWN"
+                confidence = down_votes / len(signals)
 
         return IndicatorResult(
             current_price=current_price,

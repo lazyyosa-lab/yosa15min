@@ -5,6 +5,7 @@ Uses the Bot API sendMessage endpoint directly (no python-telegram-bot overhead)
 
 import logging
 from datetime import datetime
+import asyncio
 import aiohttp
 import pytz
 
@@ -18,8 +19,6 @@ ET = pytz.timezone("America/New_York")
 
 
 class TelegramBot:
-
-    BASE_URL = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}"
 
     async def send(self, text: str):
         url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"

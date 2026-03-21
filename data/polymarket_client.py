@@ -24,8 +24,8 @@ class PolymarketClient:
         params = {
             "active": "true",
             "closed": "false",
-            "tag_slug": "btc",
-            "limit": 100
+            "limit": 100,
+            "keyword": "Bitcoin Up or Down 15 Minutes"
         }
 
         try:
@@ -50,17 +50,17 @@ class PolymarketClient:
         """
         results = []
         keywords = ["btc", "bitcoin"]
-        # UP/DOWN market titles look like: "BTC Up or Down 9:00-9:15 AM ET?"
-        direction_keywords = ["up or down", "up/down"]
+        direction_keywords = ["up or down"]  # actual title: "Bitcoin Up or Down - 15 Minutes"
 
         for m in markets:
             title = (m.get("question") or m.get("title") or "").lower()
 
             is_btc = any(k in title for k in keywords)
             is_direction = any(k in title for k in direction_keywords)
-            is_15min = ("15" in title or (":" in title and self._looks_like_window(title)))
+            # Matches "Bitcoin Up or Down - 15 Minutes" and variations
+            is_15min = "15 min" in title or "15min" in title
 
-            if not (is_btc and is_direction):
+            if not (is_btc and is_direction and is_15min):
                 continue
 
             # Parse YES price from outcomes
