@@ -1,0 +1,7 @@
+aiohttp==3.9.5
+pandas==2.2.2
+numpy==1.26.4
+apscheduler==3.10.4
+pytz==2024.1
+python-dotenv==1.0.1
+web3==6.20.0
