@@ -61,6 +61,8 @@ class TelegramBot:
             "Volume": filters.volume_confirmed,
             "Body": filters.body_committed,
             "Chainlink": filters.chainlink_spread_ok,
+            "RSI8": filters.rsi_signal,
+            "BB compr": filters.bb_compressed,
         }
         filter_lines = " ".join(
             f"{'✅' if v else '⚠️'}{k}" for k, v in checks.items()
@@ -77,11 +79,13 @@ class TelegramBot:
             f"BTC Price: ${indicators.current_price:,.2f}\n"
             f"VWAP: ${indicators.vwap:,.2f}\n"
             f"EMA9/21: {indicators.ema9:,.0f} / {indicators.ema21:,.0f}\n"
+            f"RSI(8): {indicators.rsi8:.1f}\n"
             f"ATR: {indicators.current_atr:.1f} (avg {indicators.avg_atr_20:.1f})\n"
+            f"BB width rank: {indicators.bb_width_pct_rank:.0%}\n"
             f"Volume: {indicators.volume_ratio:.2f}x avg\n"
             f"Body Ratio: {indicators.body_ratio:.2f}\n"
             f"Chainlink spread: {chainlink_spread:.3%}\n\n"
-            f"Filters: {filters.filters_passed}/8 passed\n"
+            f"Filters: {filters.filters_passed}/10 passed\n"
             f"{filter_lines}\n\n"
             f"💰 Suggested size: <b>{size_pct}% of bankroll</b>"
         )
@@ -102,7 +106,7 @@ class TelegramBot:
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"📋 {market_title}\n"
             f"⏰ {now_et}\n\n"
-            f"Filters: {filters.filters_passed}/8 passed "
+            f"Filters: {filters.filters_passed}/10 passed "
             f"({'priority' if is_priority else 'standard'} window)\n\n"
             f"Reasons:\n{reasons}"
         )

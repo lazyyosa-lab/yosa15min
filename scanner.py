@@ -3,7 +3,6 @@ WindowScanner — orchestrates data fetching, indicator computation,
 filter evaluation, and signal dispatch for each 15-min window.
 """
 
-import asyncio
 import logging
 from datetime import datetime
 import pytz
@@ -47,9 +46,8 @@ class WindowScanner:
             return
 
         # ── 3. Chainlink spread check ───────────────────────────────────
-        loop = asyncio.get_event_loop()
-        chainlink_ok, chainlink_spread = await loop.run_in_executor(
-            None, self.chainlink.check_spread, indicators.current_price
+        chainlink_ok, chainlink_spread = await self.chainlink.check_spread(
+            indicators.current_price
         )
 
         # ── 4. Fetch Polymarket markets ─────────────────────────────────

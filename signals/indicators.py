@@ -26,6 +26,9 @@ class IndicatorResult:
     macd_histogram_curr: float
     volume_ratio: float
     body_ratio: float
+    rsi8: float
+    bb_width_curr: float
+    bb_width_pct_rank: float   # 0.0 - 1.0, where it sits vs last 20 values
 
     # Derived signals (True = bullish bias)
     atr_expanded: bool
@@ -36,6 +39,8 @@ class IndicatorResult:
     macd_accelerating: bool
     volume_confirmed: bool
     body_committed: bool
+    rsi_signal: Optional[bool]      # True=UP (>50), False=DOWN (<50), None=exactly 50
+    bb_compressed: bool             # True = width below 85th percentile = breakout building
 
     # Directional vote (majority of 3 signal indicators)
     direction: str                  # "UP" or "DOWN"
@@ -67,6 +72,22 @@ def compute_macd(series: pd.Series, fast=12, slow=26, signal=9):
     signal_line = compute_ema(macd_line, signal)
     histogram = macd_line - signal_line
     return macd_line, signal_line, histogram
+
+
+def compute_rsi(series: pd.Series, period: int = 8) -> pd.Series:
+    delta = series.diff()
+    gain = delta.clip(lower=0).ewm(span=period, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(span=period, adjust=False).mean()
+    rs = gain / loss.replace(0, float("inf"))
+    return 100 - (100 / (1 + rs))
+
+
+def compute_bb_width(series: pd.Series, period: int = 20, std_dev: float = 2.0) -> pd.Series:
+    mid = series.rolling(period).mean()
+    std = series.rolling(period).std()
+    upper = mid + std_dev * std
+    lower = mid - std_dev * std
+    return (upper - lower) / mid  # normalized width
 
 
 def compute_vwap(df: pd.DataFrame) -> float:
@@ -157,8 +178,29 @@ def compute_indicators(df: pd.DataFrame) -> Optional[IndicatorResult]:
         body_ratio = body / full_range if full_range > 0 else 0
         body_committed = body_ratio >= Config.BODY_RATIO_MIN
 
-        # Direction — majority vote of 3 signal indicators
-        signals = [s for s in [vwap_signal, ema_signal, macd_signal] if s is not None]
+        # RSI(8)
+        rsi_series = compute_rsi(df["close"], period=8)
+        rsi8 = float(rsi_series.iloc[-1])
+        if rsi8 > 50:
+            rsi_signal = True
+        elif rsi8 < 50:
+            rsi_signal = False
+        else:
+            rsi_signal = None
+
+        # BB width compression
+        bb_width_series = compute_bb_width(df["close"])
+        bb_width_curr = float(bb_width_series.iloc[-1])
+        recent_widths = bb_width_series.iloc[-20:].dropna()
+        if len(recent_widths) >= 5:
+            bb_width_pct_rank = float((recent_widths < bb_width_curr).mean())
+            bb_compressed = bb_width_pct_rank <= 0.85  # below 85th percentile = compressed
+        else:
+            bb_width_pct_rank = 0.5
+            bb_compressed = False
+
+        # Direction — majority vote of 5 signal indicators (was 3)
+        signals = [s for s in [vwap_signal, ema_signal, macd_signal, rsi_signal] if s is not None]
         if not signals:
             direction = "UNCLEAR"
             confidence = 0.0
@@ -186,6 +228,9 @@ def compute_indicators(df: pd.DataFrame) -> Optional[IndicatorResult]:
             macd_histogram_curr=macd_histogram_curr,
             volume_ratio=volume_ratio,
             body_ratio=body_ratio,
+            rsi8=rsi8,
+            bb_width_curr=bb_width_curr,
+            bb_width_pct_rank=bb_width_pct_rank,
             atr_expanded=atr_expanded,
             vwap_signal=vwap_signal,
             ema_signal=ema_signal,
@@ -194,6 +239,8 @@ def compute_indicators(df: pd.DataFrame) -> Optional[IndicatorResult]:
             macd_accelerating=macd_accelerating,
             volume_confirmed=volume_confirmed,
             body_committed=body_committed,
+            rsi_signal=rsi_signal,
+            bb_compressed=bb_compressed,
             direction=direction,
             confidence=confidence
         )

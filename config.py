@@ -23,7 +23,7 @@ class Config:
     # Chainlink (Ethereum mainnet — public RPC)
     CHAINLINK_RPC_URL: str = os.getenv(
         "CHAINLINK_RPC_URL",
-        "https://eth.llamarpc.com"  # free public RPC fallback
+        "https://cloudflare-eth.com"  # fallback — set CHAINLINK_RPC_URL env var to Alchemy/Infura for reliability
     )
     CHAINLINK_BTC_USD_FEED: str = "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c"
 
@@ -38,9 +38,9 @@ class Config:
     VWAP_BAND_PCT: float = 0.0015         # 0.15% min distance from VWAP
     CHAINLINK_SPREAD_MAX: float = 0.003   # 0.3% max Binance vs Chainlink
 
-    # Tier thresholds (filters required out of 8)
-    TIER_1_MIN_FILTERS: int = 6           # 9:00 AM ET window (relaxed)
-    TIER_3_MIN_FILTERS: int = 8           # all other windows (strict)
+    # Tier thresholds (filters required out of 10)
+    TIER_1_MIN_FILTERS: int = 7           # 9:00 AM ET window (relaxed — was 6/8)
+    TIER_3_MIN_FILTERS: int = 9           # all other windows (strict — was 8/8)
 
     # Position sizing suggestion (informational only — no auto-trading)
     TIER_1_SIZE_PCT: float = 0.08         # 8% of bankroll

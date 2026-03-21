@@ -24,6 +24,8 @@ class FilterResult:
     volume_confirmed: bool = False
     body_committed: bool = False
     chainlink_spread_ok: bool = False
+    rsi_signal: bool = False
+    bb_compressed: bool = False
     polymarket_mispriced: bool = False
 
     # Mispricing detail
@@ -33,7 +35,7 @@ class FilterResult:
 
     # Summary
     filters_passed: int = 0
-    filters_total: int = 8
+    filters_total: int = 10  # 8 original + RSI + BB
     failed_reasons: list = field(default_factory=list)
 
     # Final decision
@@ -107,6 +109,25 @@ def run_filters(
     if not result.chainlink_spread_ok:
         failed.append(f"Chainlink divergence too high ({chainlink_spread:.3%})")
 
+    # ── 9. RSI(8) aligned with direction ───────────────────────────────
+    result.rsi_signal = indicators.rsi_signal is not None
+    if result.rsi_signal:
+        # Must agree with the majority direction vote
+        rsi_matches = (
+            (indicators.direction == "UP" and indicators.rsi_signal is True) or
+            (indicators.direction == "DOWN" and indicators.rsi_signal is False)
+        )
+        result.rsi_signal = rsi_matches
+    if not result.rsi_signal:
+        failed.append(f"RSI(8) conflicting ({indicators.rsi8:.1f}, direction={indicators.direction})")
+
+    # ── 10. BB width compressed ─────────────────────────────────────────
+    result.bb_compressed = indicators.bb_compressed
+    if not result.bb_compressed:
+        failed.append(
+            f"BB not compressed (width rank {indicators.bb_width_pct_rank:.0%}, need ≤85%)"
+        )
+
     # ── Count passes ────────────────────────────────────────────────────
     passed = sum([
         result.atr_expanded,
@@ -116,7 +137,9 @@ def run_filters(
         result.macd_accelerating,
         result.volume_confirmed,
         result.body_committed,
-        result.chainlink_spread_ok
+        result.chainlink_spread_ok,
+        result.rsi_signal,
+        result.bb_compressed,
     ])
     result.filters_passed = passed
     result.failed_reasons = failed
@@ -165,7 +188,7 @@ def run_filters(
     )
 
     logger.info(
-        f"Filters: {passed}/8 passed | edge={edge:.2%} | "
+        f"Filters: {passed}/10 passed | edge={edge:.2%} | "
         f"signal={'GO' if result.signal else 'SKIP'} | dir={direction}"
     )
 

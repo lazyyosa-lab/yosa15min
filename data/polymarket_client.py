@@ -25,7 +25,7 @@ class PolymarketClient:
             "active": "true",
             "closed": "false",
             "limit": 100,
-            "keyword": "Bitcoin Up or Down 15 Minutes"
+            "keyword": "Bitcoin Up or Down"
         }
 
         try:
@@ -35,6 +35,10 @@ class PolymarketClient:
                     data = await resp.json()
 
             markets = data if isinstance(data, list) else data.get("markets", [])
+            logger.info(f"Polymarket raw market count: {len(markets)}")
+            for m in markets[:5]:  # log first 5 titles for debugging
+                t = m.get("question") or m.get("title") or "NO TITLE"
+                logger.info(f"  → {t}")
             btc_windows = self._filter_window_markets(markets)
             logger.info(f"Found {len(btc_windows)} active BTC window markets")
             return btc_windows
@@ -49,16 +53,16 @@ class PolymarketClient:
         Checks title keywords and resolves UP/DOWN structure.
         """
         results = []
-        keywords = ["btc", "bitcoin"]
-        direction_keywords = ["up or down"]  # actual title: "Bitcoin Up or Down - 15 Minutes"
+        keywords = ["bitcoin"]
+        direction_keywords = ["up or down"]
+        # Actual title: "Bitcoin Up or Down - 15 min" (lowercase min, dash separator)
 
         for m in markets:
             title = (m.get("question") or m.get("title") or "").lower()
 
             is_btc = any(k in title for k in keywords)
             is_direction = any(k in title for k in direction_keywords)
-            # Matches "Bitcoin Up or Down - 15 Minutes" and variations
-            is_15min = "15 min" in title or "15min" in title
+            is_15min = "15 min" in title or "15min" in title or "15-min" in title
 
             if not (is_btc and is_direction and is_15min):
                 continue
