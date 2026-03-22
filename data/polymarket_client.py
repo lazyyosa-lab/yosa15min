@@ -1,10 +1,14 @@
 """
-Polymarket client — finds BTC UP/DOWN 15-min markets by expiry time.
-Instead of guessing titles, we filter markets expiring within the next 30 mins.
-That's the only reliable way to find short-window markets via the Gamma API.
+Polymarket client — constructs BTC 15-min market slugs directly from timestamps.
+
+Slug pattern: btc-updown-15m-{unix_timestamp_of_window_open}
+e.g. btc-updown-15m-1774161900 = window opening at 2026-03-22 06:45:00 UTC
+
+No searching needed — we calculate the slug, fetch it directly.
 """
 
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import aiohttp
@@ -13,170 +17,122 @@ from config import Config
 
 logger = logging.getLogger("polymarket")
 
-BTC_KEYWORDS = ["bitcoin", "btc"]
-
 
 class PolymarketClient:
 
+    def _next_window_timestamps(self, lookahead_windows: int = 3) -> list[int]:
+        """
+        Returns Unix timestamps for the next N 15-min window open times.
+        Windows open at :00, :15, :30, :45 of every hour UTC.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Round down to current 15-min boundary
+        minute = (now.minute // 15) * 15
+        current_window = now.replace(minute=minute, second=0, microsecond=0)
+
+        timestamps = []
+        for i in range(lookahead_windows + 1):
+            w = current_window + timedelta(minutes=15 * i)
+            timestamps.append(int(w.timestamp()))
+
+        return timestamps
+
     async def get_btc_windows(self) -> list[dict]:
         """
-        Find active BTC UP/DOWN markets expiring in the next 30 minutes.
-        Uses endDateIso to filter — no title guessing.
-        Also tries slug-based direct lookup as a secondary approach.
+        Fetch BTC 15-min UP/DOWN markets by constructing slugs directly.
+        Tries current window + next 2 windows.
         """
         results = []
+        timestamps = self._next_window_timestamps(lookahead_windows=2)
 
-        now = datetime.now(timezone.utc)
-        window_end = now + timedelta(minutes=30)
-
-        logger.info(f"Looking for markets expiring between {now.strftime('%H:%M')} and {window_end.strftime('%H:%M')} UTC")
-
-        all_markets = []
+        logger.info(f"Checking window timestamps: {timestamps}")
 
         async with aiohttp.ClientSession() as session:
-
-            # ── 1. Fetch from /events (nested markets) ───────────────────
-            try:
-                async with session.get(
-                    f"{Config.POLYMARKET_GAMMA_URL}/events",
-                    params={"active": "true", "closed": "false", "limit": 100},
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        events = data if isinstance(data, list) else data.get("events", [])
-                        for e in events:
-                            for m in e.get("markets", []):
-                                all_markets.append(m)
-            except Exception as ex:
-                logger.warning(f"/events failed: {ex}")
-
-            # ── 2. Fetch from /markets — multiple pages ──────────────────
-            for offset in [0, 100, 200, 300]:
-                try:
-                    async with session.get(
-                        f"{Config.POLYMARKET_GAMMA_URL}/markets",
-                        params={
-                            "active": "true",
-                            "closed": "false",
-                            "limit": 100,
-                            "offset": offset,
-                        },
-                        timeout=aiohttp.ClientTimeout(total=10)
-                    ) as r:
-                        if r.status == 200:
-                            data = await r.json()
-                            page = data if isinstance(data, list) else data.get("markets", [])
-                            all_markets.extend(page)
-                except Exception as ex:
-                    logger.warning(f"/markets offset={offset} failed: {ex}")
-
-            # ── 3. Direct slug lookup ────────────────────────────────────
-            # Try known slug patterns for Bitcoin 15-min markets
-            slugs = [
-                "bitcoin-up-or-down-15-min",
-                "btc-up-or-down-15-min",
-                "bitcoin-15-min",
-                "bitcoin-up-or-down",
-            ]
-            for slug in slugs:
-                try:
-                    async with session.get(
-                        f"{Config.POLYMARKET_GAMMA_URL}/markets",
-                        params={"slug": slug},
-                        timeout=aiohttp.ClientTimeout(total=8)
-                    ) as r:
-                        if r.status == 200:
-                            data = await r.json()
-                            slug_markets = data if isinstance(data, list) else data.get("markets", [])
-                            if slug_markets:
-                                logger.info(f"Slug '{slug}' returned {len(slug_markets)} markets")
-                                for m in slug_markets:
-                                    logger.info(f"  slug hit: {m.get('question') or m.get('title')}")
-                                all_markets.extend(slug_markets)
-                except Exception as ex:
-                    logger.warning(f"Slug {slug} failed: {ex}")
-
-        logger.info(f"Total markets to check: {len(all_markets)}")
-
-        # ── Deduplicate ──────────────────────────────────────────────────
-        seen = set()
-        unique = []
-        for m in all_markets:
-            mid = m.get("id") or m.get("conditionId")
-            if mid and mid not in seen:
-                seen.add(mid)
-                unique.append(m)
-
-        # ── Filter by expiry + BTC ───────────────────────────────────────
-        for m in unique:
-            title = (m.get("question") or m.get("title") or "").strip()
-            title_lower = title.lower()
-
-            # Must be BTC related
-            is_btc = any(k in title_lower for k in BTC_KEYWORDS)
-            if not is_btc:
-                continue
-
-            # Check expiry — must be within the next 30 mins
-            end_iso = m.get("endDateIso") or m.get("endDate") or ""
-            expiry = self._parse_iso(end_iso)
-
-            if expiry is None:
-                logger.info(f"BTC market no expiry date: '{title}' — skipping")
-                continue
-
-            mins_until_expiry = (expiry - now).total_seconds() / 60
-            logger.info(f"BTC market: '{title}' | expires in {mins_until_expiry:.1f} mins")
-
-            if not (0 < mins_until_expiry <= 30):
-                # Log near-miss markets (expiring in 1hr) so we can tune the window
-                if 0 < mins_until_expiry <= 60:
-                    logger.info(f"  → expiring soon but outside 30min window ({mins_until_expiry:.1f} mins)")
-                continue
-
-            # Must be active and not closed
-            if m.get("closed") or not m.get("active", True):
-                logger.info(f"  → closed/inactive, skipping")
-                continue
-
-            yes_price = self._extract_yes_price(m)
-            if yes_price is None:
-                logger.info(f"  → could not extract price, skipping")
-                continue
-
-            liquidity = float(m.get("liquidityNum") or m.get("volumeNum") or m.get("volume") or 0)
-
-            logger.info(f"  ✅ MATCHED — yes={yes_price:.3f} liq={liquidity:.0f}")
-            results.append({
-                "id":        m.get("id") or m.get("conditionId"),
-                "title":     title,
-                "yes_price": yes_price,
-                "no_price":  round(1 - yes_price, 4),
-                "liquidity": liquidity,
-                "end_date":  end_iso,
-                "raw":       m,
-            })
+            for ts in timestamps:
+                slug = f"btc-updown-15m-{ts}"
+                market = await self._fetch_by_slug(session, slug, ts)
+                if market:
+                    results.append(market)
 
         logger.info(f"Found {len(results)} active BTC window markets")
         return results
 
-    def _parse_iso(self, iso_str: str) -> Optional[datetime]:
-        """Parse ISO 8601 date string to UTC datetime."""
-        if not iso_str:
-            return None
+    async def _fetch_by_slug(
+        self, session: aiohttp.ClientSession, slug: str, ts: int
+    ) -> Optional[dict]:
+        """Fetch a specific market by slug from the Gamma events endpoint."""
+
+        window_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        mins_until = (window_dt - datetime.now(timezone.utc)).total_seconds() / 60
+        logger.info(f"Fetching slug: {slug} (opens in {mins_until:.1f} mins)")
+
         try:
-            # Handle both Z and +00:00 suffixes
-            s = iso_str.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except (ValueError, TypeError):
+            async with session.get(
+                f"{Config.POLYMARKET_GAMMA_URL}/events",
+                params={"slug": slug},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as r:
+                if r.status != 200:
+                    logger.warning(f"  slug {slug}: HTTP {r.status}")
+                    return None
+
+                data = await r.json()
+                events = data if isinstance(data, list) else data.get("events", [])
+
+                if not events:
+                    logger.info(f"  slug {slug}: no event found")
+                    return None
+
+                event = events[0]
+                logger.info(f"  Event found: {event.get('title')}")
+
+                # Extract the nested market
+                markets = event.get("markets", [])
+                if not markets:
+                    logger.warning(f"  slug {slug}: event has no nested markets")
+                    return None
+
+                m = markets[0]  # UP/DOWN is a single binary market
+                title = m.get("question") or event.get("title") or slug
+
+                yes_price = self._extract_yes_price(m)
+                if yes_price is None:
+                    logger.warning(f"  slug {slug}: could not extract price")
+                    logger.info(f"  outcomes={m.get('outcomes')} prices={m.get('outcomePrices')}")
+                    return None
+
+                # Check market is still active and not closed
+                if m.get("closed") or not m.get("active", True):
+                    logger.info(f"  slug {slug}: market closed/inactive")
+                    return None
+
+                liquidity = float(
+                    m.get("liquidityNum") or m.get("volumeNum") or
+                    m.get("volume24hr") or m.get("volume") or 0
+                )
+
+                logger.info(
+                    f"  ✅ {title} | yes={yes_price:.3f} "
+                    f"no={1-yes_price:.3f} liq={liquidity:.0f}"
+                )
+
+                return {
+                    "id":        m.get("id") or m.get("conditionId"),
+                    "title":     title,
+                    "yes_price": yes_price,
+                    "no_price":  round(1 - yes_price, 4),
+                    "liquidity": liquidity,
+                    "end_date":  m.get("endDateIso") or m.get("endDate") or "",
+                    "raw":       m,
+                }
+
+        except Exception as e:
+            logger.error(f"  slug {slug} failed: {e}")
             return None
 
     def _extract_yes_price(self, m: dict) -> Optional[float]:
-        """Safely extract UP/YES price from any Polymarket market structure."""
+        """Safely extract UP/YES price."""
         outcomes = m.get("outcomes", [])
         prices   = m.get("outcomePrices", [])
 
@@ -190,7 +146,7 @@ class PolymarketClient:
                     except (IndexError, ValueError, TypeError):
                         pass
 
-        # Fallback: first price
+        # Fallback: first price in list
         if prices:
             try:
                 p = float(prices[0])
@@ -216,7 +172,9 @@ class PolymarketClient:
         url = f"{Config.POLYMARKET_CLOB_URL}/markets/{market_id}"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=8)
+                ) as resp:
                     if resp.status == 404:
                         return None
                     resp.raise_for_status()
