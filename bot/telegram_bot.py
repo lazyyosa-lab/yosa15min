@@ -45,7 +45,12 @@ class TelegramBot:
         chainlink_spread: float
     ):
         now_et = datetime.now(ET).strftime("%I:%M %p ET")
-        tier = "🔥 PRIORITY" if filters.is_priority_window else "🟢"
+        tier_label = {
+            "STRONG_TRADE": "🔥 STRONG SIGNAL",
+            "TRADE": "🟢 SIGNAL",
+        }.get(filters.signal_tier, "🟢 SIGNAL")
+
+        tier = "🔥 PRIORITY" if filters.is_priority_window else tier_label
         size_pct = int(filters.size_pct * 100)
         edge_pct = int(filters.edge * 100)
         model_pct = int(filters.model_prob * 100)

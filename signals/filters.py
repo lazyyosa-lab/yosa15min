@@ -40,7 +40,8 @@ class FilterResult:
 
     # Final decision
     is_priority_window: bool = False
-    signal: bool = False        # True = send signal, False = skip
+    signal: bool = False
+    signal_tier: str = "SKIP"       # STRONG_TRADE, TRADE, or SKIP
     direction: str = "UNCLEAR"
     size_pct: float = 0.0
 
@@ -179,17 +180,39 @@ def run_filters(
         else Config.TIER_3_MIN_FILTERS
     )
     technical_ok = passed >= min_filters
-    result.signal = technical_ok and result.polymarket_mispriced and direction != "UNCLEAR"
+
+    # ── Tiered signal system ─────────────────────────────────────────────
+    # STRONG_TRADE: edge > 30% — never miss these regardless of filters
+    # TRADE:        edge > 15% + 6/10 filters passed
+    # SKIP:         everything else
+
+    if edge >= 0.30 and direction != "UNCLEAR":
+        signal_tier = "STRONG_TRADE"
+        result.signal = True
+    elif edge >= 0.15 and passed >= 6 and direction != "UNCLEAR":
+        signal_tier = "TRADE"
+        result.signal = True
+    elif technical_ok and result.polymarket_mispriced and direction != "UNCLEAR":
+        signal_tier = "TRADE"
+        result.signal = True
+    else:
+        signal_tier = "SKIP"
+        result.signal = False
 
     result.direction = direction
+    result.signal_tier = signal_tier
     result.size_pct = (
         Config.TIER_1_SIZE_PCT if is_priority_window
         else Config.TIER_3_SIZE_PCT
     )
 
+    # Reduce size for non-strong signals
+    if signal_tier == "TRADE" and not is_priority_window:
+        result.size_pct = result.size_pct * 0.75  # 4.5% instead of 6%
+
     logger.info(
         f"Filters: {passed}/10 passed | edge={edge:.2%} | "
-        f"signal={'GO' if result.signal else 'SKIP'} | dir={direction}"
+        f"tier={signal_tier} | dir={direction}"
     )
 
     return result
