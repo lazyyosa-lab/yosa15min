@@ -102,6 +102,8 @@ class PolymarketClient:
                     logger.info(f"  outcomes={m.get('outcomes')} prices={m.get('outcomePrices')}")
                     return None
 
+                down_price = round(1 - yes_price, 4)
+
                 # Check market is still active and not closed
                 if m.get("closed") or not m.get("active", True):
                     logger.info(f"  slug {slug}: market closed/inactive")
@@ -113,18 +115,18 @@ class PolymarketClient:
                 )
 
                 logger.info(
-                    f"  ✅ {title} | yes={yes_price:.3f} "
-                    f"no={1-yes_price:.3f} liq={liquidity:.0f}"
+                    f"  ✅ {title} | UP={yes_price:.3f} DOWN={down_price:.3f} liq={liquidity:.0f}"
                 )
 
                 return {
-                    "id":        m.get("id") or m.get("conditionId"),
-                    "title":     title,
-                    "yes_price": yes_price,
-                    "no_price":  round(1 - yes_price, 4),
-                    "liquidity": liquidity,
-                    "end_date":  m.get("endDateIso") or m.get("endDate") or "",
-                    "raw":       m,
+                    "id":         m.get("id") or m.get("conditionId"),
+                    "title":      title,
+                    "slug":       slug,
+                    "yes_price":  yes_price,
+                    "no_price":   down_price,
+                    "liquidity":  liquidity,
+                    "end_date":   m.get("endDateIso") or m.get("endDate") or "",
+                    "raw":        m,
                 }
 
         except Exception as e:
@@ -132,40 +134,51 @@ class PolymarketClient:
             return None
 
     def _extract_yes_price(self, m: dict) -> Optional[float]:
-        """Safely extract UP/YES price."""
+        """
+        Extract UP price by zipping outcomes to prices.
+        outcomePrices comes back from Polymarket as a JSON string — parse first.
+        """
+        import json
+
         outcomes = m.get("outcomes", [])
         prices   = m.get("outcomePrices", [])
 
-        if outcomes and prices:
-            for i, outcome in enumerate(outcomes):
-                if str(outcome).lower() in ["up", "yes", "higher", "above"]:
-                    try:
-                        p = float(prices[i])
-                        if 0 < p < 1:
-                            return p
-                    except (IndexError, ValueError, TypeError):
-                        pass
-
-        # Fallback: first price in list
-        if prices:
+        # Parse JSON strings if needed
+        if isinstance(outcomes, str):
             try:
-                p = float(prices[0])
-                if 0 < p < 1:
-                    return p
+                outcomes = json.loads(outcomes)
+            except Exception:
+                outcomes = []
+
+        if isinstance(prices, str):
+            try:
+                prices = json.loads(prices)
+            except Exception:
+                prices = []
+
+        # Build outcome → price map
+        price_map = {}
+        for outcome, price in zip(outcomes, prices):
+            try:
+                price_map[str(outcome).lower()] = float(price)
             except (ValueError, TypeError):
-                pass
+                continue
 
-        # CLOB tokens structure
-        for token in m.get("tokens", []):
-            if str(token.get("outcome", "")).lower() in ["up", "yes", "higher"]:
-                try:
-                    p = float(token.get("price", 0))
-                    if 0 < p < 1:
-                        return p
-                except (ValueError, TypeError):
-                    pass
+        logger.info(f"  price_map: {price_map}")
 
-        return None
+        up_price   = price_map.get("up")
+        down_price = price_map.get("down")
+
+        if up_price is None or down_price is None:
+            # Fallback: yes/no structure
+            up_price   = price_map.get("yes")
+            down_price = price_map.get("no")
+
+        if up_price is None:
+            logger.warning(f"  Missing up price — outcomes={outcomes} prices={prices}")
+            return None
+
+        return up_price
 
     async def get_market_prices(self, market_id: str) -> Optional[dict]:
         """Fetch live CLOB prices for a specific market."""
